@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def vam(cost, supply, demand):
     cost = np.array(cost, dtype=float)
     supply = supply.copy()
@@ -82,6 +83,7 @@ def northwest_corner(supply, demand):
     n = len(demand)
 
     allocation = np.zeros((m, n))
+    basis = set()
 
     i = 0
     j = 0
@@ -91,62 +93,71 @@ def northwest_corner(supply, demand):
         quantity = min(supply[i], demand[j])
 
         allocation[i][j] = quantity
+        basis.add((i, j))
 
         supply[i] -= quantity
         demand[j] -= quantity
 
-        if supply[i] == 0:
-            i += 1
+        if supply[i] == 0 and demand[j] == 0:
 
-        if demand[j] == 0:
+            if i < m - 1 and j < n - 1:
+                basis.add((i, j + 1))
+
+            i += 1
             j += 1
 
-    return allocation
+        elif supply[i] == 0:
+            i += 1
+
+        elif demand[j] == 0:
+            j += 1
+
+    return allocation, basis
 
 
-def find_loop(allocation, start):
-    m = len(allocation)
-    n = len(allocation[0])
+def find_loop(basis, start, m, n):
 
-    def search(path):
+    def search(path, horizontal):
+
         i, j = path[-1]
 
-        for new_j in range(n):
-            cell = (i, new_j)
+        if horizontal:
+            cells = [(i, col) for col in range(n) if col != j]
+        else:
+            cells = [(row, j) for row in range(m) if row != i]
 
-            if new_j != j:
-                if cell == start and len(path) >= 4:
-                    return path
+        for cell in cells:
 
-                if allocation[i][new_j] > 0 and cell not in path:
-                    result = search(path + [cell])
+            if cell == start and len(path) >= 4:
+                return path + [start]
 
-                    if result:
-                        return result
+            if cell in basis and cell not in path:
 
-        for new_i in range(m):
-            cell = (new_i, j)
+                result = search(
+                    path + [cell],
+                    not horizontal
+                )
 
-            if new_i != i:
-                if cell == start and len(path) >= 4:
-                    return path
-
-                if allocation[new_i][j] > 0 and cell not in path:
-                    result = search(path + [cell])
-
-                    if result:
-                        return result
+                if result:
+                    return result
 
         return None
 
-    return search([start])
+    result = search([start], True)
+
+    if result:
+        return result
+
+    return search([start], False)
 
 
-def modi(cost, allocation):
+def modi(cost, allocation, basis):
     cost = np.array(cost, dtype=float)
 
     m = len(cost)
     n = len(cost[0])
+
+    basis = set(basis)
 
     while True:
 
@@ -158,48 +169,50 @@ def modi(cost, allocation):
         changed = True
 
         while changed:
+
             changed = False
 
-            for i in range(m):
-                for j in range(n):
+            for i, j in basis:
 
-                    if allocation[i][j] > 0:
+                if u[i] is not None and v[j] is None:
+                    v[j] = cost[i][j] - u[i]
+                    changed = True
 
-                        if u[i] is not None and v[j] is None:
-                            v[j] = cost[i][j] - u[i]
-                            changed = True
+                elif v[j] is not None and u[i] is None:
+                    u[i] = cost[i][j] - v[j]
+                    changed = True
 
-                        elif v[j] is not None and u[i] is None:
-                            u[i] = cost[i][j] - v[j]
-                            changed = True
-
-        delta = np.zeros((m, n))
+        opportunity = np.full((m, n), np.inf)
 
         for i in range(m):
             for j in range(n):
 
-                if allocation[i][j] == 0:
-                    delta[i][j] = cost[i][j] - u[i] - v[j]
+                if (i, j) not in basis:
+                    opportunity[i][j] = (
+                        cost[i][j] - u[i] - v[j]
+                    )
 
-        entering = None
-        minimum = 0
+        minimum = opportunity.min()
 
-        for i in range(m):
-            for j in range(n):
-
-                if allocation[i][j] == 0:
-
-                    if delta[i][j] < minimum:
-                        minimum = delta[i][j]
-                        entering = (i, j)
-
-        if entering is None:
+        if minimum >= 0:
             break
 
-        loop = find_loop(allocation, entering)
+        entering = np.unravel_index(
+            np.argmin(opportunity),
+            opportunity.shape
+        )
+
+        loop = find_loop(
+            basis,
+            entering,
+            m,
+            n
+        )
 
         if loop is None:
             break
+
+        loop = loop[:-1]
 
         minus_cells = loop[1::2]
 
@@ -215,10 +228,22 @@ def modi(cost, allocation):
             else:
                 allocation[i][j] -= theta
 
+        basis.add(entering)
+
+        zero_cells = [
+            cell
+            for cell in minus_cells
+            if abs(allocation[cell[0]][cell[1]]) < 1e-9
+        ]
+
+        if zero_cells:
+            basis.remove(zero_cells[0])
+
     return allocation
 
 
 def total_cost(cost, allocation):
+
     total = 0
 
     for i in range(len(cost)):
@@ -228,22 +253,52 @@ def total_cost(cost, allocation):
     return total
 
 
-cost = [
-    [19, 30, 50, 10],
-    [70, 30, 40, 60],
-    [40, 8, 70, 20]
-]
+print("TRANSPORTATION PROBLEM")
+print()
 
-supply = [7, 9, 18]
+m = int(input("Enter number of sources: "))
+n = int(input("Enter number of destinations: "))
 
-demand = [5, 8, 7, 14]
+cost = []
 
-if sum(supply) != sum(demand):
+print("\nEnter transportation costs row by row:")
+
+for i in range(m):
+    row = list(
+        map(
+            float,
+            input(f"Source {i + 1}: ").split()
+        )
+    )
+
+    cost.append(row)
+
+supply = list(
+    map(
+        float,
+        input("\nEnter supply values: ").split()
+    )
+)
+
+demand = list(
+    map(
+        float,
+        input("Enter demand values: ").split()
+    )
+)
+
+if len(supply) != m or len(demand) != n:
+    print("Invalid supply or demand values.")
+
+elif any(len(row) != n for row in cost):
+    print("Invalid cost matrix.")
+
+elif sum(supply) != sum(demand):
     print("The transportation problem is not balanced.")
 
 else:
 
-    print("1. VAM")
+    print("\n1. VAM")
     print("2. MODI")
 
     choice = int(input("Enter your choice: "))
@@ -262,12 +317,19 @@ else:
 
     elif choice == 2:
 
-        allocation = northwest_corner(supply, demand)
+        allocation, basis = northwest_corner(
+            supply,
+            demand
+        )
 
         print("\nInitial Basic Feasible Solution:")
         print(allocation.astype(int))
 
-        allocation = modi(cost, allocation)
+        allocation = modi(
+            cost,
+            allocation,
+            basis
+        )
 
         print("\nMODI Optimal Solution:")
         print(allocation.astype(int))

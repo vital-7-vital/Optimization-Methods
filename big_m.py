@@ -1,84 +1,101 @@
 import numpy as np
 
 M = 1000000
+EPS = 1e-9
 
-def big_m_simplex(c, A, b, signs):
+
+def solve_big_m(c, A, b, signs):
+    m = len(A)
     n = len(c)
-    rows = len(A)
 
-    tableau = []
-    var_names = [f"x{i+1}" for i in range(n)]
+    for i in range(m):
+        if b[i] < 0:
+            A[i] = [-x for x in A[i]]
+            b[i] = -b[i]
 
+            if signs[i] == "<=":
+                signs[i] = ">="
+            elif signs[i] == ">=":
+                signs[i] = "<="
+
+    table = [row[:] for row in A]
+    names = [f"x{i + 1}" for i in range(n)]
+    basis = [None] * m
     artificial = []
 
-    for i in range(rows):
-        row = list(A[i])
+    for i in range(m):
 
         if signs[i] == "<=":
-            row += [1]
-            var_names.append(f"s{len(var_names) - n + 1}")
+            col = [0] * m
+            col[i] = 1
+
+            for r in range(m):
+                table[r].append(col[r])
+
+            names.append(f"s{i + 1}")
+            basis[i] = len(names) - 1
 
         elif signs[i] == ">=":
-            row += [-1]
-            var_names.append(f"s{len(var_names) - n + 1}")
-            row += [1]
-            artificial.append(len(var_names))
-            var_names.append(f"a{len(artificial)}")
+            col = [0] * m
+            col[i] = -1
+
+            for r in range(m):
+                table[r].append(col[r])
+
+            names.append(f"e{i + 1}")
+
+            col = [0] * m
+            col[i] = 1
+
+            for r in range(m):
+                table[r].append(col[r])
+
+            names.append(f"a{i + 1}")
+            artificial.append(len(names) - 1)
+            basis[i] = len(names) - 1
 
         elif signs[i] == "=":
-            row += [1]
-            artificial.append(len(var_names) + 1)
-            var_names.append(f"a{len(artificial)}")
+            col = [0] * m
+            col[i] = 1
 
-        tableau.append(row)
+            for r in range(m):
+                table[r].append(col[r])
 
-    total_vars = len(var_names)
+            names.append(f"a{i + 1}")
+            artificial.append(len(names) - 1)
+            basis[i] = len(names) - 1
 
-    for i in range(rows):
-        while len(tableau[i]) < total_vars:
-            tableau[i].append(0)
+        else:
+            print("Invalid constraint sign.")
+            return
 
-    objective = [-x for x in c]
+    table = np.array(table, dtype=float)
+    table = np.column_stack((table, np.array(b, dtype=float)))
 
-    while len(objective) < total_vars:
-        objective.append(0)
+    objective = np.zeros(len(names) + 1)
+    objective[:n] = -np.array(c, dtype=float)
 
-    for index in artificial:
-        objective[index - 1] = M
+    for j in artificial:
+        objective[j] = M
 
-    tableau = np.array(tableau, dtype=float)
-    b = np.array(b, dtype=float)
+    for i in range(m):
+        if basis[i] in artificial:
+            objective -= M * table[i]
 
-    tableau = np.column_stack((tableau, b))
-    objective = np.append(objective, 0)
+    table = np.vstack((table, objective))
 
-    for i in range(rows):
-        basic_artificial = False
+    for _ in range(1000):
 
-        for j in artificial:
-            if abs(tableau[i][j - 1] - 1) < 1e-9:
-                if np.count_nonzero(tableau[:, j - 1]) == 1:
-                    basic_artificial = True
-                    objective -= M * tableau[i]
+        entering = np.argmin(table[-1, :-1])
 
-        if basic_artificial:
-            break
-
-    tableau = np.vstack((tableau, objective))
-
-    while True:
-        last_row = tableau[-1]
-
-        entering = np.argmin(last_row[:-1])
-
-        if last_row[entering] >= -1e-9:
+        if table[-1, entering] >= -EPS:
             break
 
         ratios = []
 
-        for i in range(rows):
-            if tableau[i][entering] > 1e-9:
-                ratios.append(tableau[i][-1] / tableau[i][entering])
+        for i in range(m):
+            if table[i, entering] > EPS:
+                ratios.append(table[i, -1] / table[i, entering])
             else:
                 ratios.append(np.inf)
 
@@ -88,48 +105,67 @@ def big_m_simplex(c, A, b, signs):
             print("The problem is unbounded.")
             return
 
-        pivot = tableau[leaving][entering]
-        tableau[leaving] /= pivot
+        pivot = table[leaving, entering]
 
-        for i in range(rows + 1):
+        table[leaving] /= pivot
+
+        for i in range(m + 1):
             if i != leaving:
-                tableau[i] -= tableau[i][entering] * tableau[leaving]
+                table[i] -= table[i, entering] * table[leaving]
 
-    solution = np.zeros(n)
+        basis[leaving] = entering
 
-    for j in range(n):
-        column = tableau[:-1, j]
+    solution = np.zeros(len(names))
 
-        if np.count_nonzero(abs(column) > 1e-9) == 1:
-            row = np.where(abs(column - 1) < 1e-9)[0]
+    for i in range(m):
+        solution[basis[i]] = table[i, -1]
 
-            if len(row) == 1:
-                solution[j] = tableau[row[0], -1]
-
-    for index in artificial:
-        if tableau[:-1, index - 1].max() > 1e-9:
+    for j in artificial:
+        if solution[j] > 1e-6:
             print("The problem is infeasible.")
             return
 
-    print("Optimal Solution")
-    print()
+    print("\nOptimal Solution")
 
     for i in range(n):
-        print(f"x{i+1} =", round(solution[i], 4))
+        print(f"x{i + 1} = {solution[i]:.4f}")
 
-    print("Maximum Z =", round(np.dot(c, solution), 4))
+    print(f"Maximum Z = {np.dot(c, solution[:n]):.4f}")
 
 
-c = [3, 2]
+print("BIG-M SIMPLEX METHOD")
+print()
 
-A = [
-    [1, 1],
-    [1, 0],
-    [0, 1]
-]
+n = int(input("Enter number of decision variables: "))
+m = int(input("Enter number of constraints: "))
 
-b = [4, 1, 1]
+c = list(map(float, input("Enter objective function coefficients: ").split()))
 
-signs = ["<=", ">=", ">="]
+A = []
+b = []
+signs = []
 
-big_m_simplex(c, A, b, signs)
+for i in range(m):
+    row = list(
+        map(
+            float,
+            input(f"Enter coefficients of constraint {i + 1}: ").split()
+        )
+    )
+
+    sign = input(
+        f"Enter sign of constraint {i + 1} (<=, >=, =): "
+    ).strip()
+
+    rhs = float(
+        input(f"Enter RHS of constraint {i + 1}: ")
+    )
+
+    A.append(row)
+    signs.append(sign)
+    b.append(rhs)
+
+if len(c) != n or any(len(row) != n for row in A):
+    print("Invalid number of coefficients.")
+else:
+    solve_big_m(c, A, b, signs)
